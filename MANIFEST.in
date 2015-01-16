@@ -1,4 +1,14 @@
+include VERSION
+include LICENSE
+include *.rst
+include synctl
+include demo/README
+
+recursive-include demo *.dh
+recursive-include demo *.py
+recursive-include demo *.sh
 recursive-include docs *
+recursive-include scripts *
 recursive-include tests *.py
 recursive-include synapse/storage/schema *.sql
 recursive-include syweb/webclient *

@@ -40,3 +40,8 @@ graph/*.dot
 uploads
 
 .idea/
+
+build
+media_store
+
+.tox
