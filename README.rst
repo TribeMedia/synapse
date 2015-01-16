@@ -213,7 +213,7 @@ to install using pip and a virtualenv::
     $ virtualenv env
     $ env/bin/activate
     $ python synapse/dependencies | xargs -i pip install
-    $ pip install setuptools_trial
+    $ pip install setuptools_trial mock
 
 This will run a process of downloading and installing all the needed
 dependencies into a virtual env.
