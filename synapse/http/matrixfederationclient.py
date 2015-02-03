@@ -16,7 +16,7 @@
 
 from twisted.internet import defer, reactor, protocol
 from twisted.internet.error import DNSLookupError
-from twisted.web.client import readBody, _AgentBase, _URI
+from twisted.web.client import readBody, Agent, URI
 from twisted.web.http_headers import Headers
 from twisted.web._newclient import ResponseDone
 
@@ -40,27 +40,20 @@ import urlparse
 logger = logging.getLogger(__name__)
 
 
-class MatrixFederationHttpAgent(_AgentBase):
+class MatrixFederationEndpointFactory(object):
+    def __init__(self, hs):
+        self.tls_context_factory = hs.tls_context_factory
 
-    def __init__(self, reactor, pool=None):
-        _AgentBase.__init__(self, reactor, pool)
+    def endpointForURI(self, uri):
+        if uri.port != -1:
+            destination = "%s:%d" % (uri.host, uri.port)
+        else:
+            destination = uri.host
 
-    def request(self, destination, endpoint, method, path, params, query,
-                headers, body_producer):
-
-        host = b""
-        port = 0
-        fragment = b""
-
-        parsed_URI = _URI(b"http", destination, host, port, path, params,
-                          query, fragment)
-
-        # Set the connection pool key to be the destination.
-        key = destination
-
-        return self._requestWithEndpoint(key, endpoint, method, parsed_URI,
-                                         headers, body_producer,
-                                         parsed_URI.originForm)
+        return matrix_federation_endpoint(
+            reactor, destination, timeout=10,
+            ssl_context_factory=self.tls_context_factory
+        )
 
 
 class MatrixFederationHttpClient(object):
@@ -73,10 +66,20 @@ class MatrixFederationHttpClient(object):
     """
 
     def __init__(self, hs):
-        self.hs = hs
         self.signing_key = hs.config.signing_key[0]
         self.server_name = hs.hostname
-        self.agent = MatrixFederationHttpAgent(reactor)
+        self.agent = Agent.usingEndpointFactory(
+            reactor, MatrixFederationEndpointFactory(hs),
+        )
+
+    def _create_uri(self, destination, path_bytes, param_bytes, query_bytes):
+        if ":" in destination:
+            host_port = destination
+        else:
+            host_port = destination + ":-1"
+        return urlparse.urlunparse(
+            ("matrix", destination, path_bytes, param_bytes, query_bytes, "")
+        )
 
     @defer.inlineCallbacks
     def _create_request(self, destination, method, path_bytes,
@@ -87,12 +90,12 @@ class MatrixFederationHttpClient(object):
         headers_dict[b"User-Agent"] = [AGENT_NAME]
         headers_dict[b"Host"] = [destination]
 
-        url_bytes = urlparse.urlunparse(
-            ("", "", path_bytes, param_bytes, query_bytes, "",)
+        uri_bytes = self._create_uri(
+            destination, path_bytes, param_bytes, query_bytes
         )
 
         logger.info("Sending request to %s: %s %s",
-                    destination, method, url_bytes)
+                    destination, method, uri_bytes)
 
         logger.debug(
             "Types: %s",
@@ -107,22 +110,20 @@ class MatrixFederationHttpClient(object):
         # (once we have reliable transactions in place)
         retries_left = 5
 
-        endpoint = self._getEndpoint(reactor, destination)
+        http_uri_bytes = urlparse.urlunparse(
+            ("", "", path_bytes, param_bytes, query_bytes, "")
+        )
 
         while True:
             producer = None
             if body_callback:
-                producer = body_callback(method, url_bytes, headers_dict)
+                producer = body_callback(method, http_uri_bytes , headers_dict)
 
             try:
                 with PreserveLoggingContext():
                     response = yield self.agent.request(
-                        destination,
-                        endpoint,
                         method,
-                        path_bytes,
-                        param_bytes,
-                        query_bytes,
+                        uri_bytes,
                         Headers(headers_dict),
                         producer
                     )
@@ -142,7 +143,7 @@ class MatrixFederationHttpClient(object):
                     "Sending request failed to %s: %s %s : %s",
                     destination,
                     method,
-                    url_bytes,
+                    uri_bytes,
                     e
                 )
                 _print_ex(e)
@@ -159,7 +160,7 @@ class MatrixFederationHttpClient(object):
             response.phrase,
             destination,
             method,
-            url_bytes
+            uri_bytes
         )
 
         if 200 <= response.code < 300:
@@ -370,12 +371,6 @@ class MatrixFederationHttpClient(object):
             raise
 
         defer.returnValue((length, headers))
-
-    def _getEndpoint(self, reactor, destination):
-        return matrix_federation_endpoint(
-            reactor, destination, timeout=10,
-            ssl_context_factory=self.hs.tls_context_factory
-        )
 
 
 class _ReadBodyToFileProtocol(protocol.Protocol):
